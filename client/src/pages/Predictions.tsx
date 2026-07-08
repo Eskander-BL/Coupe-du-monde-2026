@@ -18,6 +18,7 @@ export default function Predictions() {
   const { data: dataQuality } = trpc.stats.getDataQuality.useQuery();
   const { data: teamReadiness } = trpc.stats.getTeamReadiness.useQuery();
   const { data: mlForecast } = trpc.stats.getMlForecast.useQuery();
+  const { data: governance } = trpc.stats.getGovernanceChecklist.useQuery();
   const { data: teams } = trpc.teams.getAll.useQuery();
 
   const totalCompletedMatches = useMemo(
@@ -207,6 +208,44 @@ export default function Predictions() {
             </CardContent>
           </Card>
         </div>
+
+        {governance && (
+          <Card className="bg-slate-800 border-slate-700 mb-6">
+            <CardHeader>
+              <CardTitle className="text-white">Gouvernance modele</CardTitle>
+              <CardDescription className="text-slate-400">
+                Checklist de fiabilite pour un usage professionnel
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge className={governance.summary.overallStatus === "ready" ? "bg-green-500/20 text-green-200 border-green-500/30" : "bg-amber-500/20 text-amber-200 border-amber-500/30"}>
+                  Statut global: {governance.summary.overallStatus}
+                </Badge>
+                <Badge className="bg-blue-500/20 text-blue-200 border-blue-500/30">
+                  Pass: {governance.summary.passCount}
+                </Badge>
+                <Badge className="bg-orange-500/20 text-orange-200 border-orange-500/30">
+                  Warn: {governance.summary.warnCount}
+                </Badge>
+              </div>
+
+              <div className="space-y-2">
+                {governance.checks.map(check => (
+                  <div key={check.id} className="rounded-md border border-slate-700 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="font-medium text-white">{check.label}</p>
+                      <Badge className={check.status === "pass" ? "bg-green-500/20 text-green-200 border-green-500/30" : "bg-amber-500/20 text-amber-200 border-amber-500/30"}>
+                        {check.status}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-1">{check.details}</p>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {mlForecast?.status === "ok" && (
           <Card className="bg-slate-800 border-slate-700 mb-6">

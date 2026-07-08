@@ -895,3 +895,103 @@ export async function getMlTournamentForecast() {
     },
   } as const;
 }
+
+export async function getGovernanceChecklist() {
+  const [modelValidation, dataQuality, forecast] = await Promise.all([
+    getModelValidationReport(),
+    getDataQualityReport(),
+    getMlTournamentForecast(),
+  ]);
+
+  const qualityScore = dataQuality?.qualityScore ?? 0;
+  const sampleSize = modelValidation?.sampleSize ?? 0;
+  const winnerAccuracy = modelValidation?.winnerAccuracy ?? 0;
+  const winnerBrier = modelValidation?.winnerBrier ?? 1;
+  const scoreMae = modelValidation?.scoreMae ?? 99;
+
+  const hasMonitoringConfig = Boolean(
+    process.env.MONITORING_ENDPOINT || process.env.SENTRY_DSN || process.env.DATADOG_API_KEY,
+  );
+  const hasAlertingConfig = Boolean(
+    process.env.ALERT_WEBHOOK_URL || process.env.SLACK_WEBHOOK_URL || process.env.PAGERDUTY_ROUTING_KEY,
+  );
+  const hasE2EConfig = Boolean(process.env.E2E_HEALTHCHECK_URL || process.env.CI === "true");
+
+  const checks = [
+    {
+      id: "no_absolute_claims",
+      label: "Exactitude absolue non revendiquee",
+      status: "pass",
+      details: "Le backend expose des probabilites et des metriques de confiance, pas des certitudes.",
+    },
+    {
+      id: "model_metrics",
+      label: "Metriques de modele disponibles",
+      status: sampleSize >= 10 ? "pass" : "warn",
+      details: `sampleSize=${sampleSize}, winnerAccuracy=${winnerAccuracy}%, brier=${winnerBrier}, mae=${scoreMae}`,
+    },
+    {
+      id: "temporal_backtest",
+      label: "Validation temporelle active",
+      status:
+        forecast.status === "ok" && (forecast.validation?.testMatches ?? 0) > 0
+          ? "pass"
+          : "warn",
+      details:
+        forecast.status === "ok"
+          ? `testMatches=${forecast.validation?.testMatches ?? 0}`
+          : forecast.reason,
+    },
+    {
+      id: "quality_gate",
+      label: "Quality gate donnees actif",
+      status:
+        forecast.status === "ok" && forecast.qualityGate.passed && qualityScore >= 75
+          ? "pass"
+          : "warn",
+      details: `qualityScore=${qualityScore}`,
+    },
+    {
+      id: "provider_truth_control",
+      label: "Verification externe provider",
+      status: "warn",
+      details:
+        "Verification manuelle recommandee avec sources de reference. Pas d'audit croise automatise dans ce backend.",
+    },
+    {
+      id: "monitoring",
+      label: "Monitoring continu configure",
+      status: hasMonitoringConfig ? "pass" : "warn",
+      details: hasMonitoringConfig
+        ? "Config monitoring detectee via variables d'environnement."
+        : "Ajouter MONITORING_ENDPOINT ou SENTRY_DSN ou DATADOG_API_KEY.",
+    },
+    {
+      id: "recalibration_policy",
+      label: "Politique de recalibration modele",
+      status: process.env.ML_RECALIBRATION_DAYS ? "pass" : "warn",
+      details: process.env.ML_RECALIBRATION_DAYS
+        ? `Recalibration periodique configuree: ${process.env.ML_RECALIBRATION_DAYS} jours.`
+        : "Configurer ML_RECALIBRATION_DAYS pour un cycle de recalibration explicite.",
+    },
+    {
+      id: "e2e_and_alerting",
+      label: "Tests e2e et alerting prod",
+      status: hasE2EConfig && hasAlertingConfig ? "pass" : "warn",
+      details: `e2e=${hasE2EConfig ? "ok" : "missing"}, alerting=${hasAlertingConfig ? "ok" : "missing"}`,
+    },
+  ] as const;
+
+  const passCount = checks.filter(check => check.status === "pass").length;
+  const warnCount = checks.filter(check => check.status === "warn").length;
+
+  return {
+    generatedAt: new Date().toISOString(),
+    summary: {
+      passCount,
+      warnCount,
+      overallStatus: warnCount === 0 ? "ready" : "needs_attention",
+    },
+    checks,
+  };
+}

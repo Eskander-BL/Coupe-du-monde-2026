@@ -23,6 +23,7 @@ import {
   getDataQualityReport,
   getTeamReadinessReport,
   getMlTournamentForecast,
+  getGovernanceChecklist,
 } from "./db";
 
 export const appRouter = router({
@@ -156,6 +157,9 @@ export const appRouter = router({
     }),
     getMlForecast: publicProcedure.query(async () => {
       return await getMlTournamentForecast();
+    }),
+    getGovernanceChecklist: publicProcedure.query(async () => {
+      return await getGovernanceChecklist();
     }),
   }),
 });
