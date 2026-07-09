@@ -1,9 +1,13 @@
-import mysql from 'mysql2/promise';
+import pg from 'pg';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-const connection = await mysql.createConnection(process.env.DATABASE_URL);
+const client = new pg.Client({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
+await client.connect();
 
 // Confederations
 const confederations = [
@@ -18,8 +22,8 @@ const confederations = [
 // Insert confederations
 for (const conf of confederations) {
   try {
-    await connection.execute(
-      'INSERT IGNORE INTO confederations (code, name) VALUES (?, ?)',
+    await client.query(
+      'INSERT INTO confederations (code, name) VALUES ($1, $2) ON CONFLICT (code) DO NOTHING',
       [conf.code, conf.name]
     );
   } catch (e) {
@@ -31,7 +35,7 @@ for (const conf of confederations) {
 const groupLetters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'];
 for (const letter of groupLetters) {
   try {
-    await connection.execute('INSERT IGNORE INTO `groups` (`letter`) VALUES (?)', [letter]);
+    await client.query('INSERT INTO "groups" ("letter") VALUES ($1) ON CONFLICT ("letter") DO NOTHING', [letter]);
   } catch (e) {
     // Ignore duplicates
   }
@@ -114,14 +118,14 @@ const teams = [
 
 // Get confederation IDs
 const confMap = {};
-const [confs] = await connection.execute('SELECT id, code FROM confederations');
-confs.forEach(c => confMap[c.code] = c.id);
+const confsResult = await client.query('SELECT id, code FROM confederations');
+confsResult.rows.forEach(c => confMap[c.code] = c.id);
 
 // Insert teams
 for (const team of teams) {
   try {
-    await connection.execute(
-      'INSERT IGNORE INTO teams (code, name, confederationId, groupId, offensiveStrength, defensiveStrength, overallRating) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    await client.query(
+      'INSERT INTO teams (code, name, "confederationId", "groupId", "offensiveStrength", "defensiveStrength", "overallRating") VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (code) DO NOTHING',
       [team.code, team.name, confMap[team.confederation], team.group, team.offensive, team.defensive, team.overall]
     );
   } catch (e) {
@@ -130,11 +134,15 @@ for (const team of teams) {
 }
 
 // Initialize group standings
-const [teamRows] = await connection.execute('SELECT id, groupId FROM teams');
-for (const team of teamRows) {
+const teamRowsResult = await client.query('SELECT id, "groupId" FROM teams');
+for (const team of teamRowsResult.rows) {
   try {
-    await connection.execute(
-      'INSERT IGNORE INTO groupStandings (groupId, teamId, wins, draws, losses, goalsFor, goalsAgainst, points, position) VALUES (?, ?, 0, 0, 0, 0, 0, 0, NULL)',
+    await client.query(
+      `INSERT INTO "groupStandings" ("groupId", "teamId", wins, draws, losses, "goalsFor", "goalsAgainst", points, position)
+       SELECT $1, $2, 0, 0, 0, 0, 0, 0, NULL
+       WHERE NOT EXISTS (
+         SELECT 1 FROM "groupStandings" WHERE "groupId" = $1 AND "teamId" = $2
+       )`,
       [team.groupId, team.id]
     );
   } catch (e) {
@@ -148,4 +156,4 @@ console.log(`✅ Created ${groupLetters.length} groups`);
 console.log(`✅ Created ${teams.length} teams`);
 console.log(`✅ Initialized group standings`);
 
-await connection.end();
+await client.end();

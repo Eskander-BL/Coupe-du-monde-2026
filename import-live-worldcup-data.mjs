@@ -1,5 +1,5 @@
 import dotenv from "dotenv";
-import mysql from "mysql2/promise";
+import pg from "pg";
 
 dotenv.config();
 
@@ -81,7 +81,10 @@ async function fetchProviderRows() {
 
   if (provider === "feed") {
     if (!feedUrl) {
-      throw new Error("WC2026_PLAYERS_FEED_URL is required when WC2026_PROVIDER=feed.");
+      console.warn(
+        "Skipping live import: WC2026_PLAYERS_FEED_URL is not set (provider=feed).",
+      );
+      return [];
     }
     const response = await fetch(feedUrl, { headers });
     if (!response.ok) {
@@ -145,12 +148,17 @@ async function fetchProviderRows() {
 async function main() {
   const rows = await fetchProviderRows();
   if (!rows.length) {
-    throw new Error("No players found in external payload.");
+    console.warn("No live rows imported. Database seed remains unchanged.");
+    return;
   }
 
-  const connection = await mysql.createConnection(databaseUrl);
-  const [teamRows] = await connection.execute("SELECT id, code FROM teams");
-  const teamMap = new Map(teamRows.map(team => [String(team.code).toUpperCase(), team.id]));
+  const client = new pg.Client({
+    connectionString: databaseUrl,
+    ssl: { rejectUnauthorized: false },
+  });
+  await client.connect();
+  const teamRowsResult = await client.query("SELECT id, code FROM teams");
+  const teamMap = new Map(teamRowsResult.rows.map(team => [String(team.code).toUpperCase(), team.id]));
 
   let inserted = 0;
   let updated = 0;
@@ -172,27 +180,27 @@ async function main() {
     const number = pickNumber(row.number, row.shirt_number, row.shirtNumber) || null;
     const photoUrl = row.photo_url ? String(row.photo_url) : null;
 
-    const [exists] = await connection.execute(
-      "SELECT id FROM players WHERE name = ? AND teamId = ? LIMIT 1",
+    const exists = await client.query(
+      'SELECT id FROM players WHERE name = $1 AND "teamId" = $2 LIMIT 1',
       [name, teamId],
     );
 
-    if (Array.isArray(exists) && exists.length > 0) {
-      await connection.execute(
-        "UPDATE players SET goals = ?, assists = ?, minutesPlayed = ?, position = ?, number = ?, photoUrl = COALESCE(?, photoUrl) WHERE id = ?",
-        [goals, assists, minutesPlayed, position, number, photoUrl, exists[0].id],
+    if (exists.rows.length > 0) {
+      await client.query(
+        'UPDATE players SET goals = $1, assists = $2, "minutesPlayed" = $3, position = $4, number = $5, "photoUrl" = COALESCE($6, "photoUrl") WHERE id = $7',
+        [goals, assists, minutesPlayed, position, number, photoUrl, exists.rows[0].id],
       );
       updated += 1;
     } else {
-      await connection.execute(
-        "INSERT INTO players (name, teamId, position, number, goals, assists, minutesPlayed, photoUrl) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      await client.query(
+        'INSERT INTO players (name, "teamId", position, number, goals, assists, "minutesPlayed", "photoUrl") VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
         [name, teamId, position, number, goals, assists, minutesPlayed, photoUrl],
       );
       inserted += 1;
     }
   }
 
-  await connection.end();
+  await client.end();
 
   console.log("Live player sync completed.");
   console.log(`Provider: ${provider}`);

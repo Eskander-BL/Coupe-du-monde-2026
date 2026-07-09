@@ -1,14 +1,18 @@
-import mysql from 'mysql2/promise';
+import pg from 'pg';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-const connection = await mysql.createConnection(process.env.DATABASE_URL);
+const client = new pg.Client({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
+await client.connect();
 
 // Get team IDs by code
-const [teamRows] = await connection.execute('SELECT id, code FROM teams');
+const teamRowsResult = await client.query('SELECT id, code FROM teams');
 const teamMap = {};
-teamRows.forEach(t => teamMap[t.code] = t.id);
+teamRowsResult.rows.forEach(t => teamMap[t.code] = t.id);
 
 // ==================== INSERT TOP PLAYERS WITH REAL STATS ====================
 
@@ -99,8 +103,8 @@ for (const player of players) {
   const teamId = teamMap[player.teamCode];
   if (teamId) {
     try {
-      await connection.execute(
-        'INSERT IGNORE INTO players (name, teamId, position, number, goals, assists, minutesPlayed) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      await client.query(
+        'INSERT INTO players (name, "teamId", position, number, goals, assists, "minutesPlayed") VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING',
         [player.name, teamId, player.position, player.number, player.goals, player.assists, player.minutes]
       );
     } catch (e) {
@@ -136,8 +140,8 @@ for (const match of matches) {
   
   if (homeTeamId && awayTeamId) {
     try {
-      await connection.execute(
-        'INSERT IGNORE INTO matches (matchNumber, homeTeamId, awayTeamId, homeGoals, awayGoals, matchDate, stadium, city, stage, groupId, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      await client.query(
+        'INSERT INTO matches ("matchNumber", "homeTeamId", "awayTeamId", "homeGoals", "awayGoals", "matchDate", stadium, city, stage, "groupId", status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT ("matchNumber") DO NOTHING',
         [match.matchNum, homeTeamId, awayTeamId, match.homeGoals, match.awayGoals, match.date, match.stadium, match.city, match.stage, match.group, match.status]
       );
     } catch (e) {
@@ -149,16 +153,17 @@ for (const match of matches) {
 // ==================== UPDATE GROUP STANDINGS ====================
 
 // Recalculate standings based on matches
-const [allMatches] = await connection.execute(
+const allMatchesResult = await client.query(
   `SELECT m.*, t1.code as homeCode, t2.code as awayCode 
    FROM matches m 
-   JOIN teams t1 ON m.homeTeamId = t1.id 
-   JOIN teams t2 ON m.awayTeamId = t2.id 
+   JOIN teams t1 ON m."homeTeamId" = t1.id 
+   JOIN teams t2 ON m."awayTeamId" = t2.id 
    WHERE m.status = 'completed' AND m.stage = 'group'`
 );
+const allMatches = allMatchesResult.rows;
 
 // Reset standings
-await connection.execute('UPDATE groupStandings SET wins = 0, draws = 0, losses = 0, goalsFor = 0, goalsAgainst = 0, points = 0');
+await client.query('UPDATE "groupStandings" SET wins = 0, draws = 0, losses = 0, "goalsFor" = 0, "goalsAgainst" = 0, points = 0');
 
 // Calculate standings
 const standingsMap = {};
@@ -204,8 +209,8 @@ for (const match of allMatches) {
 // Update database
 for (const [key, standing] of Object.entries(standingsMap)) {
   const [groupId, teamId] = key.split('-');
-  await connection.execute(
-    'UPDATE groupStandings SET wins = ?, draws = ?, losses = ?, goalsFor = ?, goalsAgainst = ?, points = ? WHERE groupId = ? AND teamId = ?',
+  await client.query(
+    'UPDATE "groupStandings" SET wins = $1, draws = $2, losses = $3, "goalsFor" = $4, "goalsAgainst" = $5, points = $6 WHERE "groupId" = $7 AND "teamId" = $8',
     [standing.wins, standing.draws, standing.losses, standing.gf, standing.ga, standing.points, groupId, teamId]
   );
 }
@@ -215,4 +220,4 @@ console.log(`✅ Inserted ${players.length} players`);
 console.log(`✅ Inserted ${matches.length} matches`);
 console.log(`✅ Updated group standings`);
 
-await connection.end();
+await client.end();
