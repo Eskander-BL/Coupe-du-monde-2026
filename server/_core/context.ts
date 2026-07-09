@@ -26,3 +26,19 @@ export async function createContext(
     user,
   };
 }
+
+export async function createFetchContext(req: Request): Promise<TrpcContext> {
+  let user: User | null = null;
+
+  try {
+    user = await sdk.authenticateRequest(req);
+  } catch {
+    user = null;
+  }
+
+  return {
+    req: req as unknown as TrpcContext["req"],
+    res: null as unknown as TrpcContext["res"],
+    user,
+  };
+}

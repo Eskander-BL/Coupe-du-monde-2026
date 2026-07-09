@@ -82,6 +82,10 @@ const createOAuthHttpClient = (): AxiosInstance =>
     timeout: AXIOS_TIMEOUT_MS,
   });
 
+type AuthenticatableRequest = {
+  headers?: unknown;
+};
+
 class SDKServer {
   private readonly client: AxiosInstance;
   private readonly oauthService: OAuthService;
@@ -256,16 +260,36 @@ class SDKServer {
     } as GetUserInfoWithJwtResponse;
   }
 
-  async authenticateRequest(req: Request): Promise<AuthenticatedUser> {
+  private getHeader(
+    req: AuthenticatableRequest,
+    name: "cookie" | "authorization",
+  ): string | undefined {
+    if (!req.headers) return undefined;
+
+    const headers = req.headers as Headers & {
+      cookie?: string;
+      authorization?: string;
+    };
+
+    if (headers && typeof headers.get === "function") {
+      return headers.get(name) ?? undefined;
+    }
+
+    return headers?.[name];
+  }
+
+  async authenticateRequest(
+    req: AuthenticatableRequest,
+  ): Promise<AuthenticatedUser> {
     // 1. Prefer the session cookie (regular OAuth login).
-    const cookies = this.parseCookies(req.headers.cookie);
+    const cookies = this.parseCookies(this.getHeader(req, "cookie"));
     let sessionToken = cookies.get(COOKIE_NAME);
 
     // 2. Fallback to the Authorization header (header-based session fallback via
     //    sessionStorage), used when the browser blocks iframe cookies such as
     //    Safari ITP, private browsing, or iOS/Android WebView.
     if (!sessionToken) {
-      const authHeader = req.headers.authorization;
+      const authHeader = this.getHeader(req, "authorization");
       if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
         sessionToken = authHeader.slice(7);
       }
